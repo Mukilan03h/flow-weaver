@@ -14,7 +14,6 @@ import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
-  useReactFlow,
   type Connection,
   type Edge,
   type EdgeChange,
@@ -26,13 +25,10 @@ import {
   Activity,
   Bot,
   BrainCircuit,
-  Braces,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
-  Clock3,
   Cloud,
   Code2,
   Command,
@@ -53,22 +49,17 @@ import {
   PanelLeftOpen,
   Play,
   Plus,
-  Redo2,
   Save,
   Search,
-  Settings,
   Share2,
   Slack,
   Sparkles,
   Sun,
-  TerminalSquare,
   Trash2,
-  Undo2,
   Variable,
   WandSparkles,
   Webhook,
   X,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -90,6 +81,10 @@ type WorkflowData = {
   status?: RunState;
   description?: string;
   parameter?: string;
+  runtime?: string;
+  input?: string;
+  output?: string;
+  attachments?: string[];
 };
 type WorkflowNode = Node<WorkflowData>;
 type ViewMode = "editor" | "executions";
@@ -122,24 +117,18 @@ const catalog: Array<{ label: string; subtitle: string; kind: NodeKind; icon: st
 ];
 
 const initialNodes: WorkflowNode[] = [
-  { id: "trigger", type: "workflow", position: { x: 80, y: 210 }, data: { label: "When chat message received", subtitle: "On new message", kind: "trigger", icon: "message", description: "Starts the workflow when a new chat message arrives." } },
-  { id: "agent", type: "workflow", position: { x: 370, y: 190 }, data: { label: "AI Agent", subtitle: "Tools Agent", kind: "agent", icon: "bot", description: "Plans a response and selects the right tool.", parameter: "You are a helpful operations assistant." } },
-  { id: "condition", type: "workflow", position: { x: 700, y: 210 }, data: { label: "If", subtitle: "Route response", kind: "logic", icon: "branch", description: "Routes messages based on the agent result.", parameter: "{{ $json.success }} is true" } },
-  { id: "success", type: "workflow", position: { x: 970, y: 105 }, data: { label: "Success", subtitle: "Send Slack message", kind: "app", icon: "slack", description: "Sends the completed response to the team.", parameter: "#automation-alerts" } },
-  { id: "failure", type: "workflow", position: { x: 970, y: 310 }, data: { label: "Failure", subtitle: "Send Slack message", kind: "app", icon: "slack", description: "Notifies the team when the response needs review.", parameter: "#automation-alerts" } },
-  { id: "model", type: "workflow", position: { x: 370, y: 470 }, data: { label: "OpenAI Chat Model", subtitle: "gpt-4.1 mini", kind: "model", icon: "brain", description: "Language model connected to the AI agent.", parameter: "gpt-4.1-mini" } },
-  { id: "memory", type: "workflow", position: { x: 565, y: 470 }, data: { label: "Window Memory", subtitle: "Last 10 messages", kind: "memory", icon: "database", description: "Keeps recent conversation context.", parameter: "10" } },
-  { id: "tool", type: "workflow", position: { x: 760, y: 470 }, data: { label: "HTTP Request", subtitle: "Company search API", kind: "tool", icon: "globe", description: "Looks up current account details.", parameter: "https://api.example.com/search" } },
+  { id: "trigger", type: "workflow", position: { x: 35, y: 220 }, data: { label: "New support message", subtitle: "Slack · #support-triage", kind: "trigger", icon: "message", description: "Starts the workflow when a new support message arrives.", runtime: "200 OK", output: "{ user, query, accountId }" } },
+  { id: "agent", type: "workflow", position: { x: 360, y: 165 }, data: { label: "Support Triage Agent", subtitle: "gpt-4.1-mini · Temperature 0.2", kind: "agent", icon: "bot", description: "Plans a response and selects the right tool.", parameter: "You are a helpful operations assistant.", runtime: "840ms", input: "{ query: string }", output: "{ intent, score }", attachments: ["HTTP Request · Company search", "Window Memory · Last 10 turns"] } },
+  { id: "condition", type: "workflow", position: { x: 745, y: 220 }, data: { label: "Resolution check", subtitle: "score ≥ 0.85", kind: "logic", icon: "branch", description: "Routes messages based on the agent result.", parameter: "{{ $json.success }} is true", runtime: "12ms", input: "{ score: number }" } },
+  { id: "success", type: "workflow", position: { x: 1045, y: 95 }, data: { label: "Reply to customer", subtitle: "Slack · Send message", kind: "app", icon: "slack", description: "Sends the completed response to the team.", parameter: "#automation-alerts", runtime: "Resolved", input: "{ response: string }" } },
+  { id: "failure", type: "workflow", position: { x: 1045, y: 340 }, data: { label: "Escalate for review", subtitle: "Slack · Send message", kind: "app", icon: "slack", description: "Notifies the team when the response needs review.", parameter: "#automation-alerts", runtime: "Fallback", input: "{ context, reason }" } },
 ];
 
 const initialEdges: Edge[] = [
   { id: "e1", source: "trigger", target: "agent", type: "smoothstep" },
   { id: "e2", source: "agent", target: "condition", type: "smoothstep" },
-  { id: "e3", source: "condition", target: "success", type: "smoothstep", label: "true" },
-  { id: "e4", source: "condition", target: "failure", type: "smoothstep", label: "false" },
-  { id: "e5", source: "model", target: "agent", type: "smoothstep", animated: true },
-  { id: "e6", source: "memory", target: "agent", type: "smoothstep", animated: true },
-  { id: "e7", source: "tool", target: "agent", type: "smoothstep", animated: true },
+  { id: "e3", source: "condition", target: "success", type: "smoothstep", label: "✓ Resolved", className: "edge-success" },
+  { id: "e4", source: "condition", target: "failure", type: "smoothstep", label: "× Fallback", className: "edge-failure" },
 ];
 
 function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
@@ -147,12 +136,17 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
   return (
     <div className={cn("workflow-node", `workflow-node-${data.kind}`, selected && "is-selected", data.status === "running" && "is-running", data.status === "success" && "is-success")}>
       <Handle type="target" position={Position.Left} />
-      <div className="node-icon-wrap"><Icon aria-hidden="true" /></div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-semibold text-foreground">{data.label}</div>
-        <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{data.subtitle}</div>
+      <div className="node-main-row">
+        <div className="node-icon-wrap"><Icon aria-hidden="true" /></div>
+        <div className="min-w-0 flex-1">
+          <div className="node-title text-[13px] font-semibold text-foreground">{data.label}</div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">{data.subtitle}</div>
+        </div>
+        {data.runtime ? <span className="node-runtime">{data.status === "success" ? "✓ " : ""}{data.runtime}</span> : null}
+        {data.status === "success" ? <Check className="size-3.5 text-success" /> : null}
       </div>
-      {data.status === "success" ? <Check className="size-3.5 text-success" /> : null}
+      {data.attachments?.length ? <div className="node-attachments"><span>Tools & memory</span>{data.attachments.map((item) => <div key={item}><span />{item}</div>)}</div> : null}
+      {(data.input || data.output) ? <div className="node-contract">{data.input && <span>IN · {data.input}</span>}{data.output && <span>OUT · {data.output}</span>}</div> : null}
       <Handle type="source" position={Position.Right} />
     </div>
   );
@@ -251,17 +245,15 @@ function ExecutionsView({ onBack }: { onBack: () => void }) {
   return <div className="executions-page"><div className="executions-heading"><div><p className="eyebrow">Workflow history</p><h2 className="text-xl font-semibold">Executions</h2><p className="text-sm text-muted-foreground">Inspect every run and quickly return to the canvas.</p></div><Button variant="outline" onClick={onBack}><ChevronLeft />Back to editor</Button></div><div className="stats-grid"><div><span>Success rate</span><strong>98.4%</strong></div><div><span>Average runtime</span><strong>1.7s</strong></div><div><span>Runs this week</span><strong>184</strong></div></div><div className="execution-list"><div className="execution-list-head"><span>Execution</span><span>Status</span><span>Started</span><span>Duration</span></div>{runs.map((run, index) => <button type="button" key={`${run[0]}-${run[2]}`} className="execution-row" onClick={() => toast.info("Execution details loaded") }><span><span className="run-number">#{1284 - index}</span>{run[0]}</span><span className={cn("status-pill", run[1] === "Failed" && "is-failed")}><span />{run[1]}</span><span>{run[2]}</span><span>{run[3]} <ChevronRight /></span></button>)}</div></div>;
 }
 
-function CanvasWorkspace({ nodes, edges, setNodes, setEdges, onSelect, onOpenLibrary, running, onRun }: { nodes: WorkflowNode[]; edges: Edge[]; setNodes: React.Dispatch<React.SetStateAction<WorkflowNode[]>>; setEdges: React.Dispatch<React.SetStateAction<Edge[]>>; onSelect: (node: WorkflowNode) => void; onOpenLibrary: () => void; running: boolean; onRun: () => void }) {
-  const { fitView } = useReactFlow();
+function CanvasWorkspace({ nodes, edges, setNodes, setEdges, onSelect, onOpenLibrary, theme }: { nodes: WorkflowNode[]; edges: Edge[]; setNodes: React.Dispatch<React.SetStateAction<WorkflowNode[]>>; setEdges: React.Dispatch<React.SetStateAction<Edge[]>>; onSelect: (node: WorkflowNode) => void; onOpenLibrary: () => void; theme: "light" | "dark" }) {
   const onNodesChange = useCallback((changes: NodeChange<WorkflowNode>[]) => setNodes((current) => applyNodeChanges(changes, current)), [setNodes]);
   const onEdgesChange = useCallback((changes: EdgeChange<Edge>[]) => setEdges((current) => applyEdgeChanges(changes, current)), [setEdges]);
   const onConnect = useCallback((connection: Connection) => setEdges((current) => addEdge({ ...connection, type: "smoothstep", animated: true }, current)), [setEdges]);
-  return <div className="canvas-wrap"><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeDoubleClick={(_, node) => onSelect(node)} onNodeClick={(_, node) => onSelect(node)} fitView fitViewOptions={{ padding: 0.2 }} snapToGrid snapGrid={[16, 16]} deleteKeyCode={["Backspace", "Delete"]} selectionOnDrag multiSelectionKeyCode={["Meta", "Control"]} colorMode="system" defaultEdgeOptions={{ style: { strokeWidth: 1.5 } }}>
+  return <div className="canvas-wrap"><ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeDoubleClick={(_, node) => onSelect(node)} onNodeClick={(_, node) => onSelect(node)} fitView fitViewOptions={{ padding: 0.14 }} minZoom={0.45} snapToGrid snapGrid={[16, 16]} deleteKeyCode={["Backspace", "Delete"]} selectionOnDrag multiSelectionKeyCode={["Meta", "Control"]} colorMode={theme} defaultEdgeOptions={{ style: { strokeWidth: 2 } }}>
     <Background variant={BackgroundVariant.Dots} gap={16} size={1.2} />
     <Controls showInteractive={false} position="bottom-left" />
     <MiniMap position="bottom-right" pannable zoomable nodeStrokeWidth={3} />
     <Panel position="top-right"><IconButton label="Add node" onClick={onOpenLibrary} className="canvas-add"><Plus /></IconButton></Panel>
-    <Panel position="bottom-center"><Button onClick={onRun} disabled={running} className="run-button"><Play />{running ? "Running workflow…" : "Run workflow"}</Button></Panel>
     <Panel position="top-left"><div className="canvas-hint"><MousePointer2 />Double-click a node to configure it</div></Panel>
   </ReactFlow></div>;
 }
@@ -269,7 +261,7 @@ function CanvasWorkspace({ nodes, edges, setNodes, setEdges, onSelect, onOpenLib
 export function WorkflowStudio() {
   const [nodes, setNodes] = useState<WorkflowNode[]>(initialNodes);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -306,10 +298,10 @@ export function WorkflowStudio() {
         <IconButton label="Open menu" className="mobile-menu" onClick={() => setSidebarCollapsed((value) => !value)}><Menu /></IconButton>
         <div className="title-stack"><div className="flex items-center gap-2"><Input value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} className="workflow-title" aria-label="Workflow name" /><span className="tag-chip">Production</span></div><div className="flex items-center gap-1 text-[10px] text-muted-foreground"><Cloud className="size-3" />{saved ? "All changes saved" : "Unsaved changes"}</div></div>
         <div className="view-tabs"><Button variant="ghost" className={cn(mode === "editor" && "is-active")} onClick={() => setMode("editor")}>Editor</Button><Button variant="ghost" className={cn(mode === "executions" && "is-active")} onClick={() => setMode("executions")}>Executions</Button></div>
-        <div className="header-actions"><div className="activation"><span className={cn("status-dot", active && "is-active")} /> <span>{active ? "Active" : "Inactive"}</span><Switch checked={active} onCheckedChange={setActive} /></div><IconButton label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? <Moon /> : <Sun />}</IconButton><Button variant="outline" onClick={() => toast.success("Share link copied")}><Share2 />Share</Button><Button onClick={() => { setSaved(true); toast.success("Workflow saved"); }}><Save />Save</Button><IconButton label="More options"><MoreHorizontal /></IconButton></div>
+        <div className="header-actions"><div className="activation"><span className={cn("status-dot", active && "is-active")} /> <span>{active ? "Active" : "Inactive"}</span><Switch checked={active} onCheckedChange={setActive} /></div><IconButton label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? <Moon /> : <Sun />}</IconButton><IconButton label="Share workflow" onClick={() => toast.success("Share link copied")}><Share2 /></IconButton><Button variant="outline" onClick={() => { setSaved(true); toast.success("Workflow published"); }}><Save />Publish</Button><Button onClick={() => void runWorkflow()} disabled={running}><Play />{running ? "Running…" : "Test run"}</Button><IconButton label="More options"><MoreHorizontal /></IconButton></div>
       </header>
       <div className="workspace-stage">
-        {mode === "editor" ? <ReactFlowProvider><CanvasWorkspace nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges} onSelect={(node) => { setSelectedId(node.id); setInspectorTab("parameters"); }} onOpenLibrary={() => setLibraryOpen(true)} running={running} onRun={runWorkflow} /></ReactFlowProvider> : <ExecutionsView onBack={() => setMode("editor")} />}
+        {mode === "editor" ? <ReactFlowProvider><CanvasWorkspace nodes={nodes} edges={edges} setNodes={setNodes} setEdges={setEdges} onSelect={(node) => { setSelectedId(node.id); setInspectorTab("parameters"); }} onOpenLibrary={() => setLibraryOpen(true)} theme={theme} /></ReactFlowProvider> : <ExecutionsView onBack={() => setMode("editor")} />}
         <NodeLibrary open={libraryOpen} query={query} setQuery={setQuery} onClose={() => setLibraryOpen(false)} onAdd={addCatalogNode} />
       </div>
       <footer className="status-bar"><div><span className="status-dot is-active" /> Ready</div><button type="button" onClick={() => setCommandOpen(true)}><Command /> Command menu <kbd>⌘K</kbd></button><div>{nodes.length} nodes · {edges.length} connections</div></footer>
